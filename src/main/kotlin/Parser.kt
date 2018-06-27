@@ -1,42 +1,43 @@
 package markup.parser
 
+typealias Stack<T> = java.util.LinkedList<T>
+
 /**
  * The context in which a token is to be parsed. Should be stored in a stack somewhere,
  * so a context's parent can be found easily.
  *
  * @param substitutions whether or not substitutions are made in the body of this token.
  */
-enum class _ParseContext(val substitutions: Boolean) {
+enum class ParseContext(val substitutions: Boolean) {
     NORMAL(true),
     MATH(true), // Math input mode, triggered either by $$, $, or Math {}
     RAW(false), // Text that should not be modified in any way (including \\ for newlines)
     BLOCK_COMMENT(false), // Block comments, like /* */
-    FN_PARSE_ARG(true), // Between the parentheses of a function call, parsing arguments
+    // FN_PARSE_ARG(true), // Between the parentheses of a function call, parsing arguments
+    // FN_OBJ_ARG(false), // a JSON-like object passed into a type
     // FN_QUOTED_ARG(false), // Parsing between quote marks of a string arumgnet
-    // FN_LIST_ARG(true) // Parsing a list provided as an argument to a function
+    // FN_LIST_ARG(true), // Parsing a list provided as an argument to a function
 }
-
-data class ParseContext(val context: _ParseContext, val parent: ParseContext)
 
 /**
  * A token outputted by the lexer.
  */
 abstract class Token {
 
-    abstract val lineNumber: Int
+    open val eatsTrailingNewLn = false
 
-    open val stripsTrailingNewline = true // if true, newline characters at end of raw are removed
+    abstract val lineNumber: Int
 
     /**
      * Outputs the translation of this token into LaTeX.
      *
      * @param context The current context.
-     * @param output The queue of strings represeting the document in LaTeX. Each element is a line in the
+     * @param output The queue of strings representing the document in LaTeX. Each element is a line in the
      * resulting output file.
      */
-    abstract fun translate(context: ParseContext, output: List<String>)
+    abstract fun translate(context: Stack<ParseContext>, output: MutableList<String>)
 
-    protected fun err(msg: String) = "$msg (line $lineNumber)"
+    protected fun err(msg: String): Nothing = throw Exception("Error during parsing: $msg (line $lineNumber)")
 }
 
 /**
@@ -47,27 +48,84 @@ abstract class Token {
  * Furthermore, any name preceding an unescaped curly brace (i.e. "FunctionName { ... }")
  * will be treated as a function call with no arguments.
  *
- * This is one of the few token classes that parses recursively, as the body, args, and kwargs parameters
+ * This is one of the few token classes that parses recursively, as the args, and kwargs parameters
  * can all contain other tokens.
+ *
+ * @param fnName the name of the function being called
+ * @param args unnamed parameters passed to the function
+ * @param kwargs nammed parameters passed to the function
  */
-data class FunctionCall(override val lineNumber: Int, val body: List<Token>,
+data class FunctionCall(override val lineNumber: Int, val fnName: String,
                         val args: List<Token>, val kwargs: Map<String, Token>) : Token() {
 
-    override fun translate(context: ParseContext, output: List<String>) {
+    constructor(lineNumber: Int, fnName: String): this(lineNumber, fnName, listOf(), mapOf())
+
+    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
+        when (fnName) {
+
+        }
+        // should be defined elsewhere
         return
     }
 }
 
 data class QuotedString(override val lineNumber: Int, val content: String) : Token() {
 
-    override fun translate(context: ParseContext, output: List<String>) {
+    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
 
     }
 }
 
-data class ListArg(override val lineNumber: Int, val items: List<Token>) : Token() {
+data class Word(override val lineNumber: Int, val content: String) : Token() {
 
-    override fun translate(context: ParseContext, output: List<String>) {
+    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
 
     }
+
+    // If a closure is attached, this automatically becomes a function instead
+    fun amendToFn() = FunctionCall(lineNumber, content, listOf(), mapOf())
+}
+
+data class Comment(override val lineNumber: Int, val content: String) : Token() {
+    override val eatsTrailingNewLn = true
+    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
+        output.add("%$content")
+    }
+}
+
+// ------ Special chars ------
+
+data class NewLn(override val lineNumber: Int, val prev: Token?) : Token() {
+
+    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
+        if (prev == null || !prev.eatsTrailingNewLn) {
+            output.add("\\\\") // that's 2 backslashes
+        }
+        output.add("\n") // for readabiilty; does not affect LaTeX in compilation
+    }
+}
+
+// tokens that don't have an output
+abstract class MetaToken : Token() {
+    final override fun translate(context: Stack<ParseContext>, output: MutableList<String>) { }
+}
+
+data class LnJoin(override val lineNumber: Int) : MetaToken() {
+    override val eatsTrailingNewLn = true
+}
+
+/**
+ * A dummy token that doesn't appear in translation, used to signal that trailing newlines should be eaten
+ * (since it comes right after a function call)
+ */
+data class StartClosure(override val lineNumber: Int) : MetaToken() {
+    override val eatsTrailingNewLn = true
+}
+
+/**
+ * A dummy token that doesn't appear in translation, used to signal that trailing newlines should be eaten
+ * (since it comes right after the end of a closure)
+ */
+data class EndClosure(override val lineNumber: Int) : MetaToken() {
+    override val eatsTrailingNewLn = true
 }

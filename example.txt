@@ -42,7 +42,9 @@ Document {
 			% Just for fun, let's say we want to output
 			% \vec{x} = \mathbf{A}^T\mathbf{A}\vec{b}
 			% (I forget if matrices should be bold or not)
-			Math(vars = { A: mat, x: vec, b: vec }) {
+			% uppercase=user-defined, lowercase=wrap in tag
+			% also takes in list of types for nested stuff
+			Math(vars = { A: Mat, x: vec, b: vec }) {
 				x = A^T A b
 			}
 		}
