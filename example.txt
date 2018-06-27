@@ -1,0 +1,50 @@
+Header(class="A", teacher="Teacher McTeacherFace",
+	% teacher can be either str or list of str
+	sid=0, name="jonathan shi")
+% like in kotlin, no curly braces implies empty closure
+
+Document {
+	Problem(name="circuit analysis") { % automatic numbering starts at 1
+		Part(name=Math("V_s = 5V /* etc. */")) { % block comments not preserved
+			% Within a closure, function calls are parsed differently
+			% This generates a special kind of token that has the form
+			% { fn: "Image", args: "1a.png", kwargs: {} }
+			% in addition to the normal properties of a token
+			% The preservation of newlines remains to be seen, and should
+			% be defined in some file somewhere
+			Image("1a.png") % distinguish between kwargs and positional args
+			By KCL:
+			Math {
+				i_1 - i_3 - i_2 = 0 \rightarrow i_1 - i_3 = 2
+			}
+			By Ohm's Law:
+			Math {
+				...
+			}
+			This gives the following matrix:
+			Math {
+				% normally syntactic sugar for an implicit call to Math preceding,
+				% but we're already in a math environment
+				Matrix {
+					1 -1
+					0 0 1
+					-2 0 1 -1
+					0 4 0 -1
+					% use spaces as delimiters b/c latex isn't space sensitive
+				} \ % line join
+				RowVector {
+					i_1 i_3 u_1 u_2
+				} \
+				RowVector {
+					2 5 0 0
+				}
+			}
+			% Just for fun, let's say we want to output
+			% \vec{x} = \mathbf{A}^T\mathbf{A}\vec{b}
+			% (I forget if matrices should be bold or not)
+			Math(vars = { A: mat, x: vec, b: vec }) {
+				x = A^T A b
+			}
+		}
+	}
+}
