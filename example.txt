@@ -5,7 +5,7 @@ Header(class="A", teacher="Teacher McTeacherFace",
 
 Document {
 	Problem(name="circuit analysis") { % automatic numbering starts at 1
-		Part(name=Math("V_s = 5V /* etc. */")) { % block comments not preserved
+		Part(name=Math { V_s = 5V } ) { % note the one line closure, which generates $ instead of a tag
 			% Within a closure, function calls are parsed differently
 			% This generates a special kind of token that has the form
 			% { fn: "Image", args: "1a.png", kwargs: {} }

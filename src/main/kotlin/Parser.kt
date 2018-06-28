@@ -37,6 +37,12 @@ abstract class Token {
      */
     abstract fun translate(context: Stack<ParseContext>, output: MutableList<String>)
 
+    /**
+     * Produces a debug string. Strictly speaking, it's not actually like Pythong's repr function,
+     * but it's nice to have around.
+     */
+    abstract fun repr(): String
+
     protected fun err(msg: String): Nothing = throw Exception("Error during parsing: $msg (line $lineNumber)")
 }
 
@@ -48,17 +54,12 @@ abstract class Token {
  * Furthermore, any name preceding an unescaped curly brace (i.e. "FunctionName { ... }")
  * will be treated as a function call with no arguments.
  *
- * This is one of the few token classes that parses recursively, as the args, and kwargs parameters
- * can all contain other tokens.
- *
  * @param fnName the name of the function being called
- * @param args unnamed parameters passed to the function
- * @param kwargs nammed parameters passed to the function
  */
-data class FunctionCall(override val lineNumber: Int, val fnName: String,
-                        val args: List<Token>, val kwargs: Map<String, Token>) : Token() {
-
-    constructor(lineNumber: Int, fnName: String): this(lineNumber, fnName, listOf(), mapOf())
+// @param args unnamed parameters passed to the function
+// @param kwargs nammed parameters passed to the function
+// upon further deliberation, it is safer to handle args and kwargs later
+data class FunctionName(override val lineNumber: Int, val fnName: String) : Token() {
 
     override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
         when (fnName) {
@@ -67,23 +68,48 @@ data class FunctionCall(override val lineNumber: Int, val fnName: String,
         // should be defined elsewhere
         return
     }
+
+    override fun repr() = "Function$fnName"
 }
+
+// ----- TOKENS WITHIN FUNCTION CALL CONTEXT -----
 
 data class QuotedString(override val lineNumber: Int, val content: String) : Token() {
 
     override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
 
     }
+
+    override fun repr() = "\"" + content + "\""
 }
+
+// ,
+data class ArgDelim(override val lineNumber: Int) : MetaToken(',')
+
+// =
+data class KwargAssn(override val lineNumber: Int) : MetaToken('=')
+
+// :
+data class KVDelim(override val lineNumber: Int) : MetaToken(':')
+
+// [
+data class ListArgOpen(override val lineNumber: Int) : MetaToken('[')
+
+// ]
+data class ListArgClose(override val lineNumber: Int) : MetaToken(']')
+
+// ----- -----
 
 data class Word(override val lineNumber: Int, val content: String) : Token() {
 
     override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
-
+        output.add(content)
     }
 
     // If a closure is attached, this automatically becomes a function instead
-    fun amendToFn() = FunctionCall(lineNumber, content, listOf(), mapOf())
+    fun amendToFn() = FunctionName(lineNumber, content)
+
+    override fun repr() = content
 }
 
 data class Comment(override val lineNumber: Int, val content: String) : Token() {
@@ -91,9 +117,22 @@ data class Comment(override val lineNumber: Int, val content: String) : Token() 
     override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
         output.add("%$content")
     }
+
+    override fun repr() = "%(...)"
 }
 
 // ------ Special chars ------
+
+data class MathDelim(override val lineNumber: Int) : Token() {
+    // Determines if $ or $$ is generated
+    var doubleDollar = false
+
+    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
+        output.add(if (doubleDollar) "$$" else "$")
+    }
+
+    override fun repr() = if (doubleDollar) "$$" else "$"
+}
 
 data class NewLn(override val lineNumber: Int, val prev: Token?) : Token() {
 
@@ -101,31 +140,37 @@ data class NewLn(override val lineNumber: Int, val prev: Token?) : Token() {
         if (prev == null || !prev.eatsTrailingNewLn) {
             output.add("\\\\") // that's 2 backslashes
         }
-        output.add("\n") // for readabiilty; does not affect LaTeX in compilation
+        output.add("\n") // for readability; does not affect LaTeX in compilation
     }
+
+    override fun repr() = "\n"
 }
 
-// tokens that don't have an output
-abstract class MetaToken : Token() {
+/**
+ * A dummy token that doesn't appear in translation, usually used to represent the start
+ * of some kind of scoping thing
+ */
+abstract class MetaToken(val specialChar: Char) : Token() {
     final override fun translate(context: Stack<ParseContext>, output: MutableList<String>) { }
+    override fun repr() = "$specialChar"
 }
 
-data class LnJoin(override val lineNumber: Int) : MetaToken() {
+data class LnJoin(override val lineNumber: Int) : MetaToken('\\') {
     override val eatsTrailingNewLn = true
 }
 
-/**
- * A dummy token that doesn't appear in translation, used to signal that trailing newlines should be eaten
- * (since it comes right after a function call)
- */
-data class StartClosure(override val lineNumber: Int) : MetaToken() {
+// (
+data class StartFnCall(override val lineNumber: Int) : MetaToken('(')
+
+// )
+data class EndFnCall(override val lineNumber: Int) : MetaToken(')')
+
+// {
+data class StartClosure(override val lineNumber: Int) : MetaToken('{') {
     override val eatsTrailingNewLn = true
 }
 
-/**
- * A dummy token that doesn't appear in translation, used to signal that trailing newlines should be eaten
- * (since it comes right after the end of a closure)
- */
-data class EndClosure(override val lineNumber: Int) : MetaToken() {
+// }
+data class EndClosure(override val lineNumber: Int) : MetaToken('}') {
     override val eatsTrailingNewLn = true
 }

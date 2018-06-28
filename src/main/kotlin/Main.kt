@@ -5,5 +5,6 @@ import java.io.File
 
 fun main(args: Array<String>) {
     for (t in Lexer(File("example.txt").inputStream()).lex())
-        println(t)
+        print(t.repr())
+//        println(t)
 }

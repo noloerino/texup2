@@ -10,6 +10,7 @@ enum class LexerContext {
     FN_LIST_ARG, // Inside [ in a function call
     FN_OBJ_ARG, // Inside { in a function call (basically a json obj)
     ESCAPE_OR_LNJOIN, // After a backslash, will either escape the next character or cause a line join
+    COMMENT
 }
 
 // Stack extension functions
@@ -42,14 +43,59 @@ class Lexer(stream: FileInputStream) {
     private fun pushNewLnToken() {
         pushWordToken()
         tokens.push(NewLn(lineNumber, tokens.lastOrNull()))
+        lineNumber++
+    }
+
+    private fun onCommentChar() {
+        pushWordToken()
+        contextStack.push(LexerContext.COMMENT)
     }
 
     private fun err(lineNumber: Int, msg: String): Nothing = throw Exception("Error during lexing: $msg (line $lineNumber)")
 
-    // called as soon as an open paren is hit, may be recursive
-    private fun processFnCall(fnName: String): FunctionCall {
+    // called as soon as an open paren is hit; only processes for normal function call state
+    private fun processFnCall(c: Char) {
+        when (c) {
+            '%' -> onCommentChar()
+            '\"' -> contextStack.push(LexerContext.FN_QUOTED_ARG)
+            '[' -> {
+                tokens.push(ListArgOpen(lineNumber))
+                contextStack.push(LexerContext.FN_LIST_ARG)
+            }
+            '{' -> when (tokens.last()) {
+                /* There are two possible interpretations of the curly brace:
+                 * 1) The start of some kind of dictionary
+                 * 2) The start of a closure following a function call.
+                 * The distinction can be made by the previous token: if it was a Word or end paren, then we can
+                 * be fairly certain that Word is the name of a function; if it was an =, then we can assume the user
+                 * meant to declare a dictionary. Any other preceding token is a little nonsensical, and can fairly
+                 * safely be ignored.
+                 */
+                    is EndFnCall, is Word -> processOpenClosure()
+                    else -> {
+                        tokens.push(StartClosure(lineNumber))
+                        contextStack.push(LexerContext.FN_OBJ_ARG)
+                    }
+                }
+            '=', ',' -> onFnDelimChar(c)
+            ')' -> {
+                tokens.push(EndFnCall(lineNumber))
+                contextStack.pop()
+            }
+            else -> if (c.isWhitespace()) pushWordToken() else sb.append(c)
+        }
+    }
 
-        return FunctionCall(0, "dummy")
+    // Describes universal behavior upon encountering a delimiter within a function call
+    private fun onFnDelimChar(symbol: Char) {
+        val constr = when (symbol) {
+            '=' -> ::KwargAssn
+            ',' -> ::ArgDelim
+            ':' -> ::KVDelim
+            else -> err(lineNumber, "Invalid delimiter within function \"$symbol\"")
+        }
+        pushWordToken()
+        tokens.push(constr(lineNumber))
     }
 
     // should be called when the context is escape or lnjoin
@@ -61,71 +107,127 @@ class Lexer(stream: FileInputStream) {
                 tokens.push(LnJoin(lineNumber))
             }
             // '\n' -> pushNewLnToken() interferes with some control sequences
-            '%' -> Word(lineNumber, "\\%")
+            // unsure quite what to do here
+            '\"' -> if (context == LexerContext.FN_QUOTED_ARG) sb.append(c) else sb.append(c)
+            '%', '$' -> Word(lineNumber, "\\$c")
             '{', '}' -> Word(lineNumber, c.toString())
-            else -> { // just a normal LaTeX control sequence
-                sb.append("\\$c")
+            '\n' -> pushNewLnToken()
+            else -> sb.append("\\$c") // just a normal LaTeX control sequence
+        }
+    }
+
+    private fun processOpenClosure() {
+        // Account for possibility of bad style and someone did Function{ without space
+        if (!sb.isEmpty()) {
+            tokens.push(FunctionName(lineNumber, sb.toString()))
+            clearSB()
+        } else {
+            // Account for possibility that previous token was constructed as word
+            when (tokens.lastOrNull()) {
+                null -> err(lineNumber, "cannot start document with closure")
+                is EndFnCall -> { }
+                is Word -> tokens.push((tokens.pop() as Word).amendToFn())
+                else -> err(lineNumber, "token \"${tokens.last()}\" cannot precede closure")
             }
         }
+        contextStack.push(LexerContext.NORMAL)
+        tokens.push(StartClosure(lineNumber))
     }
 
     fun lex(): List<Token> {
         while (i != -1) {
             val c = i.toChar()
             when (context) {
+                LexerContext.COMMENT -> if (c == '\n') {
+                    tokens.push(Comment(lineNumber, sb.toString()))
+                    clearSB()
+                    pushNewLnToken()
+                    contextStack.pop()
+                } else {
+                    sb.append(c)
+                }
+                LexerContext.FN_LIST_ARG -> when (c) {
+                    '%' -> onCommentChar()
+                    ',' -> onFnDelimChar(c)
+                    '[' -> { // nested lists!
+                        tokens.push(ListArgOpen(lineNumber))
+                        contextStack.push(LexerContext.FN_LIST_ARG)
+                    }
+                    ']' -> { // exit state
+                        tokens.push(ListArgClose(lineNumber))
+                        contextStack.pop()
+                    }
+                    else -> if (c.isWhitespace()) pushWordToken() else sb.append(c)
+                }
+                LexerContext.FN_QUOTED_ARG -> when (c) {
+                    '%' -> onCommentChar()
+                    '\\' -> contextStack.push(LexerContext.ESCAPE_OR_LNJOIN)
+                    '\"' -> { // exit state
+                        tokens.push(QuotedString(lineNumber, sb.toString()))
+                        clearSB()
+                        contextStack.pop()
+                    }
+                    else -> sb.append(c)
+                }
+                LexerContext.FN_OBJ_ARG -> when (c) {
+                    '%' -> onCommentChar()
+                    ':', ',' -> onFnDelimChar(c)
+                    '\\' -> contextStack.push(LexerContext.ESCAPE_OR_LNJOIN)
+                    '\"' -> contextStack.push(LexerContext.FN_QUOTED_ARG)
+                    '[' -> contextStack.push(LexerContext.FN_LIST_ARG)
+                    '{' -> when (tokens.last()) { // nested closure
+                        is EndFnCall, is Word -> processOpenClosure()
+                        else -> contextStack.push(LexerContext.FN_OBJ_ARG)
+                    }
+                    '}' -> { // exit state
+                        tokens.push(EndClosure(lineNumber))
+                        contextStack.pop()
+                    }
+                    else -> if (c.isWhitespace()) pushWordToken() else sb.append(c)
+                }
                 LexerContext.NORMAL -> when (c) {
                     '\\' -> contextStack.push(LexerContext.ESCAPE_OR_LNJOIN)
-                    /*
+                    // exiting the functioncall state is handled by a separate method
                     '(' -> {
                         if (!sb.isEmpty()) {
-                            // pass on to method for function argument processing
-                        }
-                    TODO
-                    }
-                    */
-                    '%' -> {
-                        // Comment
-                        pushWordToken()
-                        i = br.read()
-                        while (i != -1 && i.toChar() != '\n') {
-                            sb.append(i.toChar())
-                            i = br.read()
-                        }
-                        tokens.push(Comment(lineNumber, sb.toString()))
-                        pushNewLnToken()
-                        lineNumber++
-                        clearSB()
-                    }
-                    '{' -> {
-                        // Account for possibility of bad style and someone did Function{ without space
-                        if (!sb.isEmpty()) {
-                            tokens.push(FunctionCall(lineNumber, sb.toString()))
+                            // looks like "FunctionCall("
+                            // we're starting a function call
+                            contextStack.push(LexerContext.FN_CALL)
+                            tokens.push(FunctionName(lineNumber, sb.toString()))
                             clearSB()
+                            tokens.push(StartFnCall(lineNumber))
                         } else {
-                            // Account for possibility that previous token was constructed as word
-                            when (tokens.lastOrNull()) {
-                                null -> err(lineNumber, "cannot start document with closure")
-                                is FunctionCall -> { }
-                                is Word -> tokens.push((tokens.pop() as Word).amendToFn())
-                                else -> err(lineNumber, "token \"${tokens.last()}\" cannot precede closure")
-                            }
+                            // looks like "FunctionCall (", which we define not to be a function call
+                            // nothing to see here, move along
+                            sb.append('(')
                         }
-                        tokens.push(StartClosure(lineNumber))
                     }
-                    '}' -> tokens.push(EndClosure(lineNumber))
-                    '\n' -> {
-                        pushNewLnToken()
-                        lineNumber++
+                    '%' -> onCommentChar()
+                    '$' -> {  // Math environment
+                        pushWordToken()
+                        tokens.push(MathDelim(lineNumber))
                     }
+                    '{' -> processOpenClosure()
+                    '}' -> {
+                        contextStack.pop()
+                        tokens.push(EndClosure(lineNumber))
+                    }
+                    '\n' -> pushNewLnToken()
                     else -> {
                         if (!c.isWhitespace()) {
-                            sb.append(c)
+                            // Special case for math delimiters to check $ vs $$
+                            if (c == '$' && tokens.last() is MathDelim) {
+                                (tokens.last() as MathDelim).doubleDollar = true
+                            } else {
+                                sb.append(c)
+                            }
                         } else {
                             // whitespace means the previous word just ended -- generate token
                             pushWordToken()
                         }
                     }
                 }
+                LexerContext.FN_CALL -> processFnCall(c)
                 // previous char was a backslash
                 LexerContext.ESCAPE_OR_LNJOIN -> {
                     processEscapedChar(c)
