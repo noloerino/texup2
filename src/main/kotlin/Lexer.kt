@@ -1,7 +1,7 @@
 package markup.lexer
 
 import markup.parser.*
-import java.io.FileInputStream
+import java.io.Reader
 
 enum class LexerContext {
     NORMAL, // Nothing special
@@ -15,14 +15,12 @@ enum class LexerContext {
 
 // Stack extension functions
 fun <T> MutableList<T>.pop(): T = removeAt(size - 1)
-
 fun <T> MutableList<T>.push(e: T) = add(e)
 
-class Lexer(stream: FileInputStream) {
-    private val br = stream.bufferedReader()
-    private var i: Int = br.read()
+class Lexer(private val rdr: Reader) {
+    private var i: Int = rdr.read()
     private var tokens = mutableListOf<Token>()
-    private var lineNumber = 0
+    private var lineNumber = 1
     private var sb = StringBuilder() // keeps track of chars in the token so far
     private var contextStack = mutableListOf(LexerContext.NORMAL)
     private val context
@@ -51,6 +49,24 @@ class Lexer(stream: FileInputStream) {
         contextStack.push(LexerContext.COMMENT)
     }
 
+    private fun onFnOpenCurl() {
+        when (tokens.last()) {
+            /* There are two possible interpretations of the curly brace:
+             * 1) The start of some kind of dictionary
+             * 2) The start of a closure following a function call.
+             * The distinction can be made by the previous token: if it was a Word or end paren, then we can
+             * be fairly certain that Word is the name of a function; if it was an =, then we can assume the user
+             * meant to declare a dictionary. Any other preceding token is a little nonsensical, and can fairly
+             * safely be ignored.
+             */
+            is EndFnCall, is Word -> processOpenClosure()
+            else -> {
+                tokens.push(StartObj(lineNumber))
+                contextStack.push(LexerContext.FN_OBJ_ARG)
+            }
+        }
+    }
+
     private fun err(lineNumber: Int, msg: String): Nothing = throw Exception("Error during lexing: $msg (line $lineNumber)")
 
     // called as soon as an open paren is hit; only processes for normal function call state
@@ -62,21 +78,7 @@ class Lexer(stream: FileInputStream) {
                 tokens.push(ListArgOpen(lineNumber))
                 contextStack.push(LexerContext.FN_LIST_ARG)
             }
-            '{' -> when (tokens.last()) {
-                /* There are two possible interpretations of the curly brace:
-                 * 1) The start of some kind of dictionary
-                 * 2) The start of a closure following a function call.
-                 * The distinction can be made by the previous token: if it was a Word or end paren, then we can
-                 * be fairly certain that Word is the name of a function; if it was an =, then we can assume the user
-                 * meant to declare a dictionary. Any other preceding token is a little nonsensical, and can fairly
-                 * safely be ignored.
-                 */
-                    is EndFnCall, is Word -> processOpenClosure()
-                    else -> {
-                        tokens.push(StartClosure(lineNumber))
-                        contextStack.push(LexerContext.FN_OBJ_ARG)
-                    }
-                }
+            '{' -> onFnOpenCurl()
             '=', ',' -> onFnDelimChar(c)
             ')' -> {
                 tokens.push(EndFnCall(lineNumber))
@@ -116,17 +118,26 @@ class Lexer(stream: FileInputStream) {
         }
     }
 
+    private fun createNoArgFn() {
+        tokens.push(FunctionName(lineNumber, sb.toString()))
+        tokens.push(StartFnCall(lineNumber))
+        tokens.push(EndFnCall(lineNumber))
+    }
+
     private fun processOpenClosure() {
         // Account for possibility of bad style and someone did Function{ without space
         if (!sb.isEmpty()) {
-            tokens.push(FunctionName(lineNumber, sb.toString()))
-            clearSB()
+            createNoArgFn()
         } else {
             // Account for possibility that previous token was constructed as word
             when (tokens.lastOrNull()) {
                 null -> err(lineNumber, "cannot start document with closure")
                 is EndFnCall -> { }
-                is Word -> tokens.push((tokens.pop() as Word).amendToFn())
+                is Word -> {
+                    tokens.push((tokens.pop() as Word).amendToFn())
+                    tokens.push(StartFnCall(lineNumber))
+                    tokens.push(EndFnCall(lineNumber))
+                }
                 else -> err(lineNumber, "token \"${tokens.last()}\" cannot precede closure")
             }
         }
@@ -149,6 +160,8 @@ class Lexer(stream: FileInputStream) {
                 LexerContext.FN_LIST_ARG -> when (c) {
                     '%' -> onCommentChar()
                     ',' -> onFnDelimChar(c)
+                    '{' -> onFnOpenCurl()
+                    '\"' -> contextStack.push(LexerContext.FN_QUOTED_ARG)
                     '[' -> { // nested lists!
                         tokens.push(ListArgOpen(lineNumber))
                         contextStack.push(LexerContext.FN_LIST_ARG)
@@ -175,12 +188,9 @@ class Lexer(stream: FileInputStream) {
                     '\\' -> contextStack.push(LexerContext.ESCAPE_OR_LNJOIN)
                     '\"' -> contextStack.push(LexerContext.FN_QUOTED_ARG)
                     '[' -> contextStack.push(LexerContext.FN_LIST_ARG)
-                    '{' -> when (tokens.last()) { // nested closure
-                        is EndFnCall, is Word -> processOpenClosure()
-                        else -> contextStack.push(LexerContext.FN_OBJ_ARG)
-                    }
+                    '{' -> onFnOpenCurl()
                     '}' -> { // exit state
-                        tokens.push(EndClosure(lineNumber))
+                        tokens.push(EndObj(lineNumber))
                         contextStack.pop()
                     }
                     else -> if (c.isWhitespace()) pushWordToken() else sb.append(c)
@@ -235,7 +245,7 @@ class Lexer(stream: FileInputStream) {
                 }
             }
 
-            i = br.read()
+            i = rdr.read()
         }
         return tokens
     }
