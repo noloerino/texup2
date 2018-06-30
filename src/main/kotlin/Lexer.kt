@@ -84,6 +84,7 @@ class Lexer(private val rdr: Reader) {
                 tokens.push(EndFnCall(lineNumber))
                 contextStack.pop()
             }
+            '\n' -> pushNewLnToken()
             else -> if (c.isWhitespace()) pushWordToken() else sb.append(c)
         }
     }
@@ -108,7 +109,7 @@ class Lexer(private val rdr: Reader) {
                 pushWordToken()
                 tokens.push(LnJoin(lineNumber))
             }
-            // '\n' -> pushNewLnToken() interferes with some control sequences
+            // 'n' -> pushNewLnToken() interferes with some control sequences
             // unsure quite what to do here
             '\"' -> if (context == LexerContext.FN_QUOTED_ARG) sb.append(c) else sb.append(c)
             '%', '$' -> Word(lineNumber, "\\$c")

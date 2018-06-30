@@ -4,24 +4,24 @@ import markup.lexer.Lexer
 import markup.parser.Parser
 import java.io.File
 
-// Stack extension functions
-fun <T> MutableList<T>.pop(): T = removeAt(size - 1)
-
-fun <T> MutableList<T>.push(e: T) = add(e)
-
 fun main(args: Array<String>) {
-    val bw = File("gentokens.txt").bufferedWriter()
-    val tokens = Lexer(File("example.txt").bufferedReader()).lex()
+    val fileName = args[0]
+    val tokens = Lexer(File(fileName).bufferedReader()).lex()
+    val bw = File("lextokens.txt").bufferedWriter()
     for (t in tokens) {
-        val s = t.repr()
-//        print(s)
-        bw.write(s)
-//        println(t)
+        val s = t.toString()
+        bw.write(s + "\n")
     }
     bw.flush()
 
-    val lines = Parser(tokens).parse()
-    for (l in lines) {
-        print(l)
+    val words = Parser(tokens).parse()
+    val pw = File("out.tex").printWriter()
+    for (i in words.indices) {
+        pw.write(words[i])
+        if (words[i].isNotBlank() && i + 1 < words.size && words[i + 1].isNotBlank()) {
+            pw.write(" ")
+        }
     }
+    pw.flush()
+    println("wrote file")
 }

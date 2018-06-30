@@ -5,6 +5,7 @@ import java.util.NoSuchElementException
 typealias Stack<T> = MutableList<T>
 fun <T> MutableList<T>.pop(): T = removeAt(size - 1)
 fun <T> MutableList<T>.push(e: T) = add(e)
+fun <T> MutableList<T>.peek(): T = last()
 
 /**
  * The context in which a token is to be parsed. Should be stored in a stack somewhere,
@@ -15,44 +16,71 @@ fun <T> MutableList<T>.push(e: T) = add(e)
 enum class ParseContext(val substitutions: Boolean) {
     NORMAL(true),
     MATH(true), // Math input mode, triggered either by $$, $, or Math {}
-    RAW(false), // Text that should not be modified in any way (including \\ for newlines)
-    BLOCK_COMMENT(false), // Block comments, like /* */
+    // RAW(false), // Text that should not be modified in any way (including \\ for newlines)
+    FN_ARG(true),
+    INHERIT_PARENT(true), // Inherits the behavior of the previous thing
     // FN_PARSE_ARG(true), // Between the parentheses of a function call, parsing arguments
     // FN_OBJ_ARG(false), // a JSON-like object passed into a type
     // FN_QUOTED_ARG(false), // Parsing between quote marks of a string arumgnet
     // FN_LIST_ARG(true), // Parsing a list provided as an argument to a function
 }
 
-class Parser(fromLexer: List<Token>) {
-    val tokens: List<Token>
+private val ctxStack = mutableListOf(ParseContext.NORMAL)
+private val fnStack = mutableListOf<FnMapping>()
 
-    init {
-        val _tokens = mutableListOf<Token>()
-        val iter = fromLexer.iterator()
+class Parser(val tokens: List<Token>) {
+
+    fun parse(): List<String> {
+        val output = mutableListOf<String>()
+        val iter = tokens.iterator()
         while (iter.hasNext()) {
             val t = iter.next()
-            if (t is FunctionName) {
+            val nextToken: Token = if (t is FunctionName) {
                 try {
-                    _tokens.push(buildFnCall(t, iter))
+                    buildFnCall(t, iter)
                 } catch (e: NoSuchElementException) {
                     if (!iter.hasNext()) {
                         t.err("error in lexing (no tokens following fn call ${t.fnName})")
+                    } else {
+                        throw e
                     }
                 }
             } else {
-                _tokens.push(t)
+                t
             }
+            output.add(nextToken.translate())
         }
-        // validate
-        _tokens.filter { it.intermediate }
-                .forEach { it.err("Unparsed intermediate token ${it.repr()}") }
-        tokens = _tokens
+        return output
     }
+}
 
-    fun parse(): List<String> {
-
-        return listOf()
+fun flattenWords(words: List<String>): String {
+    val sb = StringBuilder()
+    for (i in words.indices) {
+        sb.append(words[i])
+        if (words[i].isNotBlank() && i + 1 < words.size && words[i + 1].isNotBlank()) {
+            sb.append(" ")
+        }
     }
+    return sb.toString()
+}
+
+private fun parseClosureToClosure(iter: Iterator<Token>): List<String> {
+    // performs parsing between tokens
+    // an open closure should have been the last token read out by iter
+    // HOWEVER, startclosure's translate method was never called
+    // so we need to push this onto the stack
+    fnStack.push(lastFnCall!!.fnObj)
+    var t = iter.next()
+    val output = mutableListOf<String>()
+    while (iter.hasNext() && t !is EndClosure) {
+        val nextToken = if (t is FunctionName) buildFnCall(t, iter) else t
+        output.add(nextToken.translate())
+        t = iter.next()
+    }
+    // add end closure
+    output.add(t.translate())
+    return output
 }
 
 /**
@@ -71,11 +99,9 @@ abstract class Token {
     /**
      * Outputs the translation of this token into LaTeX.
      *
-     * @param context The current context.
-     * @param output The queue of strings representing the document in LaTeX. Each element is a line in the
-     * resulting output file.
+     * these strings is the token that generated it; newline characters are given their own item.
      */
-    abstract fun translate(context: Stack<ParseContext>, output: MutableList<String>)
+    abstract fun translate(): String
 
     /**
      * Produces a debug string. Strictly speaking, it's not actually like Pythong's repr function,
@@ -84,8 +110,10 @@ abstract class Token {
     abstract fun repr(): String
 
     fun err(msg: String): Nothing = throw Exception("Error during parsing: $msg (line $lineNumber)")
+    fun warn(msg: String) = System.err.println("Warning: $msg (line $lineNumber)")
 }
 
+private var lastFnCall: FunctionCall? = null
 /**
  * Represents a "function," which looks like "FunctionName(args, kwarg='value'".
  * The lexer will make the distinction between "FunctionName(...)" and "FunctionName (...)"
@@ -101,10 +129,21 @@ abstract class Token {
 data class FunctionCall(override val lineNumber: Int, val fnName: String,
                         val args: List<Token>, val kwargs: Map<String, Token>) : Token() {
 
-    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
-        when (fnName) {
+    override val eatsTrailingNewLn = true
 
+    val fnObj: FnMapping = getFnOrDefault(fnName)(args, kwargs)
+
+    val bodyContext = fnObj.bodyCtx
+    fun begin() = fnObj.begin(ctxStack)
+    val end = fnObj.end()
+
+    override fun translate(): String {
+        if (fnName[0].isLowerCase()) {
+            warn("$fnName should be capitalized")
         }
+        lastFnCall = this
+        // context is not pushed here because there might not be a closure
+        return begin()
     }
 
     override fun repr() = "FnCall($fnName)"
@@ -113,9 +152,16 @@ data class FunctionCall(override val lineNumber: Int, val fnName: String,
 private fun buildFnCall(nameObj: FunctionName, iter: Iterator<Token>): FunctionCall {
     val args = mutableListOf<Token>()
     val kwargs = mutableMapOf<String, Token>()
+    // eats one token to use up the open paren
     require(iter.next() is StartFnCall) { "Error in lexing: function name must be followed by open paren" }
     read@ while (true) {
-        val t1 = buildFnArg(iter.next(), iter)
+        val received = iter.next()
+        if (received is Comment || received is NewLn) {
+            continue
+        } else if (received is EndFnCall) {
+            break@read
+        }
+        val t1 = buildFnArg(received, iter)
         val maybeEq = iter.next()
         when (maybeEq) {
             is ArgDelim -> args.push(t1) // comma right after single value
@@ -128,7 +174,8 @@ private fun buildFnCall(nameObj: FunctionName, iter: Iterator<Token>): FunctionC
                 when (maybeComma) {
                     is ArgDelim -> {}
                     is EndFnCall -> break@read
-                    else -> maybeComma.err("expected delimiter, got ${maybeComma.repr()}")
+                    is StartClosure -> flattenWords(parseClosureToClosure(iter))
+                    else -> maybeComma.err("${nameObj.fnName} expected delimiter, got ${maybeComma.repr()}")
                 }
             }
             is EndFnCall -> {
@@ -141,17 +188,15 @@ private fun buildFnCall(nameObj: FunctionName, iter: Iterator<Token>): FunctionC
     return FunctionCall(nameObj.lineNumber, nameObj.fnName, args, kwargs)
 }
 
-data class FnArgObj(override val lineNumber: Int, val dict: Map<String, Token>) : Token() {
-    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
+// abstract class FnArg extended by obj, lst, qtdstr
 
-    }
+data class FnArgObj(override val lineNumber: Int, val dict: Map<String, Token>) : Token() {
+    override fun translate(): String = ""
     override fun repr() = dict.toString()
 }
 
 data class FnArgLst(override val lineNumber: Int, val items: List<Token>) : Token() {
-    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
-
-    }
+    override fun translate(): String = ""
     override fun repr() = items.toString()
 }
 
@@ -161,6 +206,7 @@ private fun buildFnArg(signal: Token, iter: Iterator<Token>): Token {
         is ListArgOpen -> buildFnArgLst(signal.lineNumber, iter)
         is Word, is QuotedString -> signal
         is FunctionName -> buildFnCall(signal, iter)
+        is EndFnCall -> signal.err("found end paren too early")
         else -> signal.err("invalid function arg ${signal.repr()}")
     }
 }
@@ -206,31 +252,20 @@ private fun buildFnArgLst(lineNumber: Int, iter: Iterator<Token>): FnArgLst {
     return FnArgLst(lineNumber, lst)
 }
 
-data class FunctionName(override val lineNumber: Int, val fnName: String) : Token() {
-
-    override val intermediate = true
-
-    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
-        return
-    }
-
+data class FunctionName(override val lineNumber: Int, val fnName: String) : FnMedToken('f') {
     override fun repr() = "Fn$fnName"
 }
 
 data class QuotedString(override val lineNumber: Int, val content: String) : Token() {
 
-    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
-
-    }
+    override fun translate() = content
 
     override fun repr() = "\"" + content + "\""
 }
 
 data class Word(override val lineNumber: Int, val content: String) : Token() {
 
-    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
-        output.add(content)
-    }
+    override fun translate() = content
 
     // If a closure is attached, this automatically becomes a function instead
     fun amendToFn() = FunctionName(lineNumber, content)
@@ -240,10 +275,7 @@ data class Word(override val lineNumber: Int, val content: String) : Token() {
 
 data class Comment(override val lineNumber: Int, val content: String) : Token() {
     override val eatsTrailingNewLn = true
-    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
-        output.add("%$content")
-    }
-
+    override fun translate() = "%$content"
     override fun repr() = "%(...)"
 }
 
@@ -253,8 +285,13 @@ data class MathDelim(override val lineNumber: Int) : Token() {
     // Determines if $ or $$ is generated
     var doubleDollar = false
 
-    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
-        output.add(if (doubleDollar) "$$" else "$")
+    override fun translate(): String {
+        if (ctxStack.peek() == ParseContext.MATH) {
+            ctxStack.pop()
+        } else {
+            ctxStack.push(ParseContext.MATH)
+        }
+        return if (doubleDollar) "$$" else "$"
     }
 
     override fun repr() = if (doubleDollar) "$$" else "$"
@@ -262,11 +299,13 @@ data class MathDelim(override val lineNumber: Int) : Token() {
 
 data class NewLn(override val lineNumber: Int, val prev: Token?) : Token() {
 
-    override fun translate(context: Stack<ParseContext>, output: MutableList<String>) {
+    override fun translate(): String {
+        var s = ""
         if (prev == null || !prev.eatsTrailingNewLn) {
-            output.add("\\\\") // that's 2 backslashes
+            s += "\\\\" // that's 2 backslashes
         }
-        output.add("\n") // for readability; does not affect LaTeX in compilation
+        s += "\n" // for readability; does not affect LaTeX in compilation
+        return s
     }
 
     override fun repr() = "\n"
@@ -277,7 +316,9 @@ data class NewLn(override val lineNumber: Int, val prev: Token?) : Token() {
  * of some kind of scoping thing
  */
 abstract class MetaToken(val specialChar: Char) : Token() {
-    final override fun translate(context: Stack<ParseContext>, output: MutableList<String>) { }
+    override fun translate(): String {
+        err("attempted to translate meta token ${repr()}")
+    }
     override fun repr() = "$specialChar"
 }
 
@@ -295,21 +336,29 @@ data class EndFnCall(override val lineNumber: Int) : MetaToken(')')
 data class StartClosure(override val lineNumber: Int) : MetaToken('{') {
     override val eatsTrailingNewLn = true
     override fun repr() = "StartClo:"
+    override fun translate(): String {
+        // begin tags are not handled here because the fn might not need a closure
+        fnStack.push(lastFnCall!!.fnObj)
+        ctxStack.push(lastFnCall!!.bodyContext)
+        return ""
+    }
 }
 
 // }
 data class EndClosure(override val lineNumber: Int) : MetaToken('}') {
     override val eatsTrailingNewLn = true
     override fun repr() = ":EndClo"
+    override fun translate(): String {
+        ctxStack.pop()
+        return fnStack.pop().end()
+    }
 }
 
 data class StartObj(override val lineNumber: Int) : MetaToken('{') {
-    override val eatsTrailingNewLn = true
     override fun repr() = "StartObj:"
 }
 
 data class EndObj(override val lineNumber: Int) : MetaToken('}') {
-    override val eatsTrailingNewLn = true
     override fun repr() = ":EndObj"
 }
 
