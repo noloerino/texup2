@@ -16,7 +16,8 @@ fun <T> MutableList<T>.peek(): T = last()
 enum class ParseContext(val substitutions: Boolean) {
     NORMAL(true),
     MATH(true), // Math input mode, triggered either by $$, $, or Math {}
-    // RAW(false), // Text that should not be modified in any way (including \\ for newlines)
+//    RAW(false), // Text that should not be modified in any way (including \\ for newlines)
+//    RAW_MATH(false),
     FN_ARG(true),
     INHERIT_PARENT(true), // Inherits the behavior of the previous thing
     // FN_PARSE_ARG(true), // Between the parentheses of a function call, parsing arguments
@@ -25,8 +26,12 @@ enum class ParseContext(val substitutions: Boolean) {
     // FN_LIST_ARG(true), // Parsing a list provided as an argument to a function
 }
 
+// Stack of parse contexts
 private val ctxStack = mutableListOf(ParseContext.NORMAL)
+// Stack of function nests
 private val fnStack = mutableListOf<FnMapping>()
+// The number of indents before the next token
+private fun indLevel() = fnStack.size
 
 class Parser(val tokens: List<Token>) {
 
@@ -52,17 +57,6 @@ class Parser(val tokens: List<Token>) {
         }
         return output
     }
-}
-
-fun flattenWords(words: List<String>): String {
-    val sb = StringBuilder()
-    for (i in words.indices) {
-        sb.append(words[i])
-        if (words[i].isNotBlank() && i + 1 < words.size && words[i + 1].isNotBlank()) {
-            sb.append(" ")
-        }
-    }
-    return sb.toString()
 }
 
 private fun parseClosureToClosure(iter: Iterator<Token>): List<String> {
@@ -266,9 +260,6 @@ data class QuotedString(override val lineNumber: Int, val content: String) : Tok
 data class Word(override val lineNumber: Int, val content: String) : Token() {
 
     override fun translate() = content
-
-    // If a closure is attached, this automatically becomes a function instead
-    fun amendToFn() = FunctionName(lineNumber, content)
 
     override fun repr() = content
 }

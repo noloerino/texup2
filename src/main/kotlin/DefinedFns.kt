@@ -4,7 +4,7 @@ import java.io.File
 
 private val definedFnCalls: Map<String, (List<Token>, Map<String, Token>) -> FnMapping>
         = mapOf("Math" to ::Math, "math" to ::Math, "Header" to ::Header,
-        "Problem" to ::Problem, "Part" to ::Part, "Bold" to ::Bold)
+        "Problem" to ::Problem, "Part" to ::Part, "Bold" to ::Bold, "Italic" to ::Italic)
 
 private val aliases: Map<String, String>
         = mapOf("Box" to "mdframed")
@@ -30,6 +30,7 @@ class DefaultFn(key: String, args: List<Token>, kwargs: Map<String, Token>) : Fn
             for (a in args) {
                 sb.append("{${a.translate()}}")
             }
+            return sb.toString()
         }
         return "\\begin{$name}"
     }
@@ -38,8 +39,11 @@ class DefaultFn(key: String, args: List<Token>, kwargs: Map<String, Token>) : Fn
 }
 
 class Problem(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs) {
-    override fun begin(ctxStack: Stack<ParseContext>)
-            = "\\subsection*{$problemNum. ${kwargs["name"]?.translate()}}\n\\begin{enumerate}"
+    override fun begin(ctxStack: Stack<ParseContext>): String {
+        val s = "\\subsection*{$problemNum. ${kwargs["name"]?.translate()}}\n\\begin{enumerate}"
+        problemNum++
+        return s
+    }
     override fun end() = "\\end{enumerate}\\clearpage"
 
     companion object {
@@ -48,7 +52,7 @@ class Problem(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, k
 }
 
 class Part(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs) {
-    override fun begin(ctxStack: Stack<ParseContext>) = "\\item"
+    override fun begin(ctxStack: Stack<ParseContext>) = "\\item ${kwargs["name"]?.translate()} \\\\"
     override fun end() = ""
 }
 
@@ -56,10 +60,19 @@ class Bold(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwar
     var math = false
     override fun begin(ctxStack: Stack<ParseContext>): String {
         math = ctxStack.last() == ParseContext.MATH
-        return "\\begin{" + (if (math) "mathbf" else "textbf") + "}"
+        return "\\" + (if (math) "mathbf" else "textbf") + "{"
     }
     override fun end(): String {
-        return "\\end{" + (if (math) "mathbf" else "textbf") + "}"
+        return "}"
+    }
+}
+
+class Italic(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs) {
+    override fun begin(ctxStack: Stack<ParseContext>): String {
+        return "\\textit{"
+    }
+    override fun end(): String {
+        return "}"
     }
 }
 
@@ -102,9 +115,9 @@ class Header(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(listOf()
 }
 
 class Math(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs) {
-    override fun begin(ctxStack: Stack<ParseContext>) = "\\begin{center}"
+    override fun begin(ctxStack: Stack<ParseContext>) = "\\begin{align}"
 
-    override fun end() = "\\end{center}"
+    override fun end() = "\\end{align}"
 
     override val bodyCtx = ParseContext.MATH
 }

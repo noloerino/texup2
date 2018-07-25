@@ -49,17 +49,18 @@ class Lexer(private val rdr: Reader) {
         contextStack.push(LexerContext.COMMENT)
     }
 
-    private fun onFnOpenCurl() {
+    private fun onOpenCurl() {
         when (tokens.last()) {
-            /* There are two possible interpretations of the curly brace:
-             * 1) The start of some kind of dictionary
+            /* There are three possible interpretations of the curly brace:
+             * 1) The start of some kind of dictionary.
              * 2) The start of a closure following a function call.
-             * The distinction can be made by the previous token: if it was a Word or end paren, then we can
-             * be fairly certain that Word is the name of a function; if it was an =, then we can assume the user
+             * 3) Just a normal old LaTeX call.
+             * The distinction can be made by the previous token: if it was a Word, then it's probably just a vanilla
+             * LaTeX command; if it's an EndFnCall, then it's a function; if it was an =, then we can assume the user
              * meant to declare a dictionary. Any other preceding token is a little nonsensical, and can fairly
-             * safely be ignored.
+             * safely be ignored until erroring at parse time.
              */
-            is EndFnCall, is Word -> processOpenClosure()
+            is EndFnCall, is Word -> onOpenClosure()
             else -> {
                 tokens.push(StartObj(lineNumber))
                 contextStack.push(LexerContext.FN_OBJ_ARG)
@@ -78,7 +79,7 @@ class Lexer(private val rdr: Reader) {
                 tokens.push(ListArgOpen(lineNumber))
                 contextStack.push(LexerContext.FN_LIST_ARG)
             }
-            '{' -> onFnOpenCurl()
+            '{' -> onOpenCurl()
             '=', ',' -> onFnDelimChar(c)
             ')' -> {
                 tokens.push(EndFnCall(lineNumber))
@@ -114,34 +115,15 @@ class Lexer(private val rdr: Reader) {
             '\"' -> if (context == LexerContext.FN_QUOTED_ARG) sb.append(c) else sb.append(c)
             '%', '$' -> Word(lineNumber, "\\$c")
             '{', '}' -> Word(lineNumber, c.toString())
-            '\n' -> pushNewLnToken()
+            '\n' -> {
+                pushWordToken()
+                lineNumber++
+            } //pushNewLnToken()
             else -> sb.append("\\$c") // just a normal LaTeX control sequence
         }
     }
 
-    private fun createNoArgFn() {
-        tokens.push(FunctionName(lineNumber, sb.toString()))
-        tokens.push(StartFnCall(lineNumber))
-        tokens.push(EndFnCall(lineNumber))
-    }
-
-    private fun processOpenClosure() {
-        // Account for possibility of bad style and someone did Function{ without space
-        if (!sb.isEmpty()) {
-            createNoArgFn()
-        } else {
-            // Account for possibility that previous token was constructed as word
-            when (tokens.lastOrNull()) {
-                null -> err(lineNumber, "cannot start document with closure")
-                is EndFnCall -> { }
-                is Word -> {
-                    tokens.push((tokens.pop() as Word).amendToFn())
-                    tokens.push(StartFnCall(lineNumber))
-                    tokens.push(EndFnCall(lineNumber))
-                }
-                else -> err(lineNumber, "token \"${tokens.last()}\" cannot precede closure")
-            }
-        }
+    private fun onOpenClosure() {
         contextStack.push(LexerContext.NORMAL)
         tokens.push(StartClosure(lineNumber))
     }
@@ -161,7 +143,7 @@ class Lexer(private val rdr: Reader) {
                 LexerContext.FN_LIST_ARG -> when (c) {
                     '%' -> onCommentChar()
                     ',' -> onFnDelimChar(c)
-                    '{' -> onFnOpenCurl()
+                    '{' -> onOpenCurl()
                     '\"' -> contextStack.push(LexerContext.FN_QUOTED_ARG)
                     '[' -> { // nested lists!
                         tokens.push(ListArgOpen(lineNumber))
@@ -189,7 +171,7 @@ class Lexer(private val rdr: Reader) {
                     '\\' -> contextStack.push(LexerContext.ESCAPE_OR_LNJOIN)
                     '\"' -> contextStack.push(LexerContext.FN_QUOTED_ARG)
                     '[' -> contextStack.push(LexerContext.FN_LIST_ARG)
-                    '{' -> onFnOpenCurl()
+                    '{' -> onOpenCurl()
                     '}' -> { // exit state
                         tokens.push(EndObj(lineNumber))
                         contextStack.pop()
@@ -218,7 +200,7 @@ class Lexer(private val rdr: Reader) {
                         pushWordToken()
                         tokens.push(MathDelim(lineNumber))
                     }
-                    '{' -> processOpenClosure()
+                    '{' -> onOpenClosure()
                     '}' -> {
                         contextStack.pop()
                         tokens.push(EndClosure(lineNumber))
