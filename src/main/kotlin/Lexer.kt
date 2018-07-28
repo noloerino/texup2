@@ -82,6 +82,7 @@ class Lexer(private val rdr: Reader) {
             '{' -> onOpenCurl()
             '=', ',' -> onFnDelimChar(c)
             ')' -> {
+                pushWordToken()
                 tokens.push(EndFnCall(lineNumber))
                 contextStack.pop()
             }

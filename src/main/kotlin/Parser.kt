@@ -30,8 +30,7 @@ enum class ParseContext(val substitutions: Boolean) {
 private val ctxStack = mutableListOf(ParseContext.NORMAL)
 // Stack of function nests
 private val fnStack = mutableListOf<FnMapping>()
-// The number of indents before the next token
-private fun indLevel() = fnStack.size
+private var indLevel = 0
 
 class Parser(val tokens: List<Token>) {
 
@@ -168,7 +167,6 @@ private fun buildFnCall(nameObj: FunctionName, iter: Iterator<Token>): FunctionC
                 when (maybeComma) {
                     is ArgDelim -> {}
                     is EndFnCall -> break@read
-                    is StartClosure -> flattenWords(parseClosureToClosure(iter))
                     else -> maybeComma.err("${nameObj.fnName} expected delimiter, got ${maybeComma.repr()}")
                 }
             }

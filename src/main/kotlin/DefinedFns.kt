@@ -12,13 +12,13 @@ private val aliases: Map<String, String>
 fun getFnOrDefault(key: String): (List<Token>, Map<String, Token>) -> FnMapping = definedFnCalls[key]
         ?: { args: List<Token>, kwargs: Map<String, Token> -> DefaultFn(key, args, kwargs) }
 
-abstract class FnMapping(val args: List<Token>, val kwargs: Map<String, Token>) {
+abstract class FnMapping(val args: List<Token>, val kwargs: Map<String, Token>, val indentedBody: Boolean) {
     abstract fun begin(ctxStack: Stack<ParseContext>): String
     abstract fun end(): String
     open val bodyCtx: ParseContext = ParseContext.INHERIT_PARENT
 }
 
-class DefaultFn(key: String, args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs) {
+class DefaultFn(key: String, args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs, false) {
     private val name = aliases[key] ?: key.toLowerCase()
 
     private val nameIsTag = listOf("frac", "mathbb")
@@ -38,7 +38,7 @@ class DefaultFn(key: String, args: List<Token>, kwargs: Map<String, Token>) : Fn
     override fun end() = if (name in nameIsTag) "" else "\\end{$name}"
 }
 
-class Problem(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs) {
+class Problem(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs, true) {
     override fun begin(ctxStack: Stack<ParseContext>): String {
         val s = "\\subsection*{$problemNum. ${kwargs["name"]?.translate()}}\n\\begin{enumerate}"
         problemNum++
@@ -51,12 +51,12 @@ class Problem(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, k
     }
 }
 
-class Part(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs) {
+class Part(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs, true) {
     override fun begin(ctxStack: Stack<ParseContext>) = "\\item ${kwargs["name"]?.translate()} \\\\"
     override fun end() = ""
 }
 
-class Bold(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs) {
+class Bold(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs, false) {
     var math = false
     override fun begin(ctxStack: Stack<ParseContext>): String {
         math = ctxStack.last() == ParseContext.MATH
@@ -67,7 +67,7 @@ class Bold(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwar
     }
 }
 
-class Italic(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs) {
+class Italic(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs, false) {
     override fun begin(ctxStack: Stack<ParseContext>): String {
         return "\\textit{"
     }
@@ -77,7 +77,7 @@ class Italic(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kw
 }
 
 // TODO abstract out later
-class Header(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(listOf(), mapOf()) {
+class Header(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(listOf(), mapOf(), false) {
     val configLines = File("tempConfig.txt").readLines()
     val hwName = configLines[0]
     val name = configLines[1]
@@ -114,7 +114,7 @@ class Header(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(listOf()
     override val bodyCtx = ParseContext.INHERIT_PARENT
 }
 
-class Math(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs) {
+class Math(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs, true) {
     override fun begin(ctxStack: Stack<ParseContext>) = "\\begin{align}"
 
     override fun end() = "\\end{align}"
