@@ -30,12 +30,15 @@ enum class ParseContext(val substitutions: Boolean) {
 private val ctxStack = mutableListOf(ParseContext.NORMAL)
 // Stack of function nests
 private val fnStack = mutableListOf<FnMapping>()
-private var indLevel = 0
+private val indLevel get() = fnStack.size
+
+private val INDENT_STR = "    "
 
 class Parser(val tokens: List<Token>) {
 
     fun parse(): List<String> {
         val output = mutableListOf<String>()
+        var lastToken: Token? = null
         val iter = tokens.iterator()
         while (iter.hasNext()) {
             val t = iter.next()
@@ -52,7 +55,13 @@ class Parser(val tokens: List<Token>) {
             } else {
                 t
             }
+            if (lastToken is NewLn) {
+                output.add(INDENT_STR.repeat(indLevel))
+            } else if (lastToken !is StartClosure && lastToken !is StartFnCall) {
+                output.add(" ")
+            }
             output.add(nextToken.translate())
+            lastToken = nextToken
         }
         return output
     }

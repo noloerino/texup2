@@ -40,11 +40,11 @@ class DefaultFn(key: String, args: List<Token>, kwargs: Map<String, Token>) : Fn
 
 class Problem(args: List<Token>, kwargs: Map<String, Token>) : FnMapping(args, kwargs, true) {
     override fun begin(ctxStack: Stack<ParseContext>): String {
-        val s = "\\subsection*{$problemNum. ${kwargs["name"]?.translate()}}\n\\begin{enumerate}"
+        val s = "\\subsection*{$problemNum. ${kwargs["name"]?.translate()}} \\begin{enumerate}"
         problemNum++
         return s
     }
-    override fun end() = "\\end{enumerate}\\clearpage"
+    override fun end() = "\\end{enumerate} \\clearpage"
 
     companion object {
         var problemNum = 0
